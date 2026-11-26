@@ -106,6 +106,7 @@ pub fn run() {
                 );
                 return;
             }
+            let method = request.method().clone();
             let uri = request.uri().clone();
             let path = uri.path().to_string();
             let query = uri.query().unwrap_or("").to_string();
@@ -113,7 +114,14 @@ pub fn run() {
             // （Windows/Android 是 http://<scheme>.localhost，macOS/iOS/Linux 是 <scheme>://localhost）。
             // 它同时是 m3u8 分片/key 改写用的前缀，必须与前端 src/api.ts 的 LOCAL 一致。
             tauri::async_runtime::spawn(async move {
-                let mut resp = media::handle(&path, &query, media::LOCAL_ORIGIN).await;
+                let mut resp = if method == tauri::http::Method::OPTIONS {
+                    tauri::http::Response::builder()
+                        .status(204)
+                        .body(Vec::new())
+                        .unwrap()
+                } else {
+                    media::handle(&path, &query, media::LOCAL_ORIGIN).await
+                };
                 if let Some(origin) =
                     request_origin.and_then(|s| tauri::http::HeaderValue::from_str(&s).ok())
                 {
@@ -127,6 +135,14 @@ pub fn run() {
                         tauri::http::HeaderValue::from_static("*"),
                     );
                 }
+                resp.headers_mut().insert(
+                    "Access-Control-Allow-Methods",
+                    tauri::http::HeaderValue::from_static("GET, HEAD, OPTIONS"),
+                );
+                resp.headers_mut().insert(
+                    "Access-Control-Allow-Headers",
+                    tauri::http::HeaderValue::from_static("Range, Content-Type, Accept, Origin"),
+                );
                 responder.respond(resp);
             });
         })
@@ -146,6 +162,8 @@ pub fn run() {
             api::check_update,
             api::open_url,
             api::set_orientation,
+            api::get_safe_insets,
+            api::set_status_bar_light,
             api::api_login,
             api::api_register,
             api::api_logout,

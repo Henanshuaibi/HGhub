@@ -94,7 +94,7 @@ pub async fn line_probe(urls: Vec<String>) -> Result<Value, String> {
 
 /* ───────────────────────── 更新检查 ───────────────────────── */
 
-const REPO: &str = "Minireel/HGhub";
+const REPO: &str = "Henanshuaibi/HGhub";
 
 fn ver_parts(v: &str) -> Vec<u64> {
     v.trim()
@@ -177,20 +177,138 @@ pub async fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> 
         .map_err(|e| e.to_string())
 }
 
-/// 切换移动端屏幕方向（iOS 原生旋转屏幕方向：横屏 Landscape / 竖屏 Portrait）。
+/// 切换移动端屏幕方向与沉浸系统栏（iOS / Android 原生旋转屏幕方向：横屏 Landscape / 竖屏 Portrait）。
 #[tauri::command]
-pub async fn set_orientation(app: tauri::AppHandle, landscape: bool) -> Result<(), String> {
+pub async fn set_orientation(
+    app: tauri::AppHandle,
+    landscape: bool,
+    immersive: Option<bool>,
+) -> Result<(), String> {
     #[cfg(target_os = "ios")]
     {
+        let _ = immersive;
         let _ = app.run_on_main_thread(move || {
             request_ios_orientation(landscape);
         });
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(target_os = "android")]
     {
-        let _ = (&app, landscape);
+        let _ = &app;
+        request_android_orientation(landscape, immersive.unwrap_or(landscape));
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        let _ = (&app, landscape, immersive);
     }
     Ok(())
+}
+
+/// 读取 Android Edge-to-Edge 安全区高度（状态栏/挖孔屏 top 与导航栏 bottom，单位 dp）。
+#[tauri::command]
+pub async fn get_safe_insets() -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    {
+        let (top, bottom) = read_android_safe_insets();
+        Ok(json!({ "top": top, "bottom": bottom }))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Ok(json!({ "top": 0, "bottom": 0 }))
+    }
+}
+
+/// 同步 Android 状态栏与导航栏前景图标深浅（浅色内容页用深色图标，深色/刷剧页用亮色图标）。
+#[tauri::command]
+pub async fn set_status_bar_light(light: bool) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    {
+        request_android_status_bar_light(light);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = light;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn with_android_activity<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut jni::JNIEnv<'_>, &jni::objects::JObject<'_>) -> Option<R>,
+{
+    let ctx = ndk_context::android_context();
+    let vm_ptr = ctx.vm();
+    let activity_ptr = ctx.context();
+    if vm_ptr.is_null() || activity_ptr.is_null() {
+        return None;
+    }
+    unsafe {
+        let vm = std::mem::ManuallyDrop::new(jni::JavaVM::from_raw(vm_ptr.cast()).ok()?);
+        let mut env = vm.attach_current_thread_permanently().ok()?;
+        let activity =
+            std::mem::ManuallyDrop::new(jni::objects::JObject::from_raw(activity_ptr.cast()));
+        let out = f(&mut env, &activity);
+        if env.exception_check().unwrap_or(false) {
+            let _ = env.exception_clear();
+        }
+        out
+    }
+}
+
+#[cfg(target_os = "android")]
+fn request_android_orientation(landscape: bool, immersive: bool) {
+    let _ = with_android_activity(|env, activity| {
+        let res = env.call_method(
+            activity,
+            "applyImmersiveOrientation",
+            "(ZZ)V",
+            &[
+                jni::objects::JValue::Bool(u8::from(landscape)),
+                jni::objects::JValue::Bool(u8::from(immersive)),
+            ],
+        );
+        if res.is_err() {
+            let _ = env.exception_clear();
+            // 6 = SCREEN_ORIENTATION_SENSOR_LANDSCAPE, -1 = SCREEN_ORIENTATION_UNSPECIFIED
+            let mode: i32 = if landscape { 6 } else { -1 };
+            let _ = env.call_method(
+                activity,
+                "setRequestedOrientation",
+                "(I)V",
+                &[jni::objects::JValue::Int(mode)],
+            );
+            let _ = env.exception_clear();
+        }
+        Some(())
+    });
+}
+
+#[cfg(target_os = "android")]
+fn read_android_safe_insets() -> (u32, u32) {
+    with_android_activity(|env, activity| {
+        let packed = env
+            .call_method(activity, "getSafeInsetsPacked", "()J", &[])
+            .and_then(|v| v.j())
+            .ok()?;
+        let top = ((packed >> 16) & 0xFFFF) as u32;
+        let bottom = (packed & 0xFFFF) as u32;
+        Some((top, bottom))
+    })
+    .unwrap_or((0, 0))
+}
+
+#[cfg(target_os = "android")]
+fn request_android_status_bar_light(light: bool) {
+    let _ = with_android_activity(|env, activity| {
+        let _ = env.call_method(
+            activity,
+            "applyStatusBarLight",
+            "(Z)V",
+            &[jni::objects::JValue::Bool(u8::from(light))],
+        );
+        let _ = env.exception_clear();
+        Some(())
+    });
 }
 
 #[cfg(target_os = "ios")]

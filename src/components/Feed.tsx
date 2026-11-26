@@ -253,13 +253,13 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     };
   }, [isDesktop, active, setFs, keepPlayingThroughTransition]);
 
-  /* 进入 / 退出全屏：对横屏视频直接调用原生屏幕方向切换，让手机系统界面真正横过来 */
+  /* 进入 / 退出全屏：沉浸隐藏系统栏，对横屏视频直接调用原生屏幕方向切换让手机系统界面真正横过来 */
   const enterFs = useCallback(() => {
     keepPlayingThroughTransition();
     setClean(false);
     setFs(true);
+    invoke("set_orientation", { landscape: isLandscapeVideo, immersive: true }).catch(() => {});
     if (isLandscapeVideo) {
-      invoke("set_orientation", { landscape: true }).catch(() => {});
       try {
         (screen.orientation as unknown as { lock?: (o: string) => Promise<void> })?.lock?.("landscape")?.catch(() => {});
       } catch { /* ignore */ }
@@ -270,14 +270,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     keepPlayingThroughTransition();
     setClean(false);
     setFs(false);
-    invoke("set_orientation", { landscape: false }).catch(() => {});
+    invoke("set_orientation", { landscape: false, immersive: false }).catch(() => {});
     try { screen.orientation?.unlock?.(); } catch { /* ignore */ }
   }, [setClean, setFs, keepPlayingThroughTransition]);
 
   /* 全屏状态下若视频宽高刚加载出来且为横屏，自动补发一次横屏指令 */
   useEffect(() => {
     if (!isDesktop && fs && isLandscapeVideo) {
-      invoke("set_orientation", { landscape: true }).catch(() => {});
+      invoke("set_orientation", { landscape: true, immersive: true }).catch(() => {});
     }
   }, [isDesktop, fs, isLandscapeVideo]);
 
@@ -439,12 +439,16 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active, controlsLocked, panel, time, index]);
 
-  /* 安卓返回键：面板打开时先关面板 */
+  /* 安卓返回键：锁屏时防误触拦截，面板打开时先关面板 */
   useEffect(() => {
+    if (controlsLocked) {
+      setBackHandler(() => { toast("播放控制已锁定 · 点右侧锁图标解锁", "info"); return true; });
+      return () => setBackHandler(null);
+    }
     if (!panel) { setBackHandler(null); return undefined; }
     setBackHandler(() => { setPanel(null); return true; });
     return () => setBackHandler(null);
-  }, [panel]);
+  }, [panel, controlsLocked, toast]);
 
   useEffect(() => {
     const onFs = () => setFullscreen(!!document.fullscreenElement);

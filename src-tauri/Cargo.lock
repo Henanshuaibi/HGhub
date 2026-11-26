@@ -1609,6 +1609,8 @@ version = "1.2.1"
 dependencies = [
  "aes",
  "base64 0.22.1",
+ "jni",
+ "ndk-context",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

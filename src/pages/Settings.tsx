@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, APP_VERSION, hostOf, logLine, platform, type UpdateInfo } from "../api";
+import { setBackHandler } from "../back";
 import { useStore } from "../store";
 import { Modal, Toggle } from "../components/ui";
 import LinePicker from "../components/LinePicker";
@@ -25,6 +26,21 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
   };
   useEffect(readLine, []);
   useEffect(() => { void initPlaybackLog(); }, []);
+
+  useEffect(() => {
+    if (!lineOpen && !about && !clearOpen && !update?.has_update) {
+      setBackHandler(null);
+      return undefined;
+    }
+    setBackHandler(() => {
+      if (lineOpen) { setLineOpen(false); readLine(); return true; }
+      if (update?.has_update) { setUpdate(null); return true; }
+      if (clearOpen) { setClearOpen(false); return true; }
+      if (about) { setAbout(false); return true; }
+      return false;
+    });
+    return () => setBackHandler(null);
+  }, [lineOpen, about, clearOpen, update]);
 
   const checkUpdate = async () => {
     setChecking(true);
@@ -218,8 +234,8 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
           </div>
 
           <p className="text-[12px] text-on/70 leading-relaxed mt-4">
-            基于 Rust + Tauri 2 构建的跨平台客户端，支持 Windows、macOS、Android 与 Linux。
-            界面遵循 Fluent 设计语言，播放器采用沉浸式竖屏信息流。
+            基于 Rust + Tauri 2 构建的跨平台客户端，支持 Android、iOS、Windows、macOS 与 Linux。
+            界面遵循 Fluent 设计语言，播放器采用沉浸式竖屏信息流与增强手势控制。
           </p>
 
           <div className="mt-4 rounded-(--r-sm) bg-s3/60 p-3 text-[11px] text-mut leading-relaxed">
@@ -228,10 +244,10 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
           </div>
 
           <div className="mt-4 divide-y divide-s3">
-            <button onClick={() => { navigator.clipboard?.writeText("https://github.com/Minireel/HGhub").then(() => toast("仓库地址已复制", "ok")).catch(() => {}); }}
+            <button onClick={() => { navigator.clipboard?.writeText("https://github.com/Henanshuaibi/HGhub").then(() => toast("仓库地址已复制", "ok")).catch(() => {}); }}
               className="w-full flex items-center gap-2 py-2.5 text-left pressable">
               <ILink size={15} className="text-mut" />
-              <span className="text-[12px] text-on/85">github.com/Minireel/HGhub</span>
+              <span className="text-[12px] text-on/85">github.com/Henanshuaibi/HGhub</span>
               <span className="ml-auto text-[10.5px] text-primary">复制</span>
             </button>
             <button onClick={() => { navigator.clipboard?.writeText("https://huangguoai.com").then(() => toast("站点地址已复制", "ok")).catch(() => {}); }}

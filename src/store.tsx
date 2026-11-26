@@ -264,7 +264,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setFsState((prev) => {
       const next = typeof v === "function" ? (v as (p: boolean) => boolean)(prev) : v;
       if (!next) {
-        invoke("set_orientation", { landscape: false }).catch(() => {});
+        setCleanState(false);
+        invoke("set_orientation", { landscape: false, immersive: false }).catch(() => {});
         try { screen.orientation?.unlock?.(); } catch { /* ignore */ }
       }
       return next;

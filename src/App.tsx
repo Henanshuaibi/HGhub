@@ -217,9 +217,35 @@ function ShellInner({ collapsed, theater }: { collapsed: boolean; theater: boole
 /* ============ 移动端（无壳） ============ */
 function MobileShell() {
   const { platform } = useStore();
+  useEffect(() => {
+    if (platform !== "android") return undefined;
+    const syncInsets = () => {
+      invoke<{ top?: number; bottom?: number }>("get_safe_insets")
+        .then((res) => {
+          if (typeof res?.top === "number") {
+            document.documentElement.style.setProperty("--android-sat", `${res.top}px`);
+          }
+          if (typeof res?.bottom === "number") {
+            document.documentElement.style.setProperty("--android-sab", `${res.bottom}px`);
+          }
+        })
+        .catch(() => {});
+    };
+    syncInsets();
+    window.addEventListener("resize", syncInsets);
+    window.addEventListener("orientationchange", syncInsets);
+    return () => {
+      window.removeEventListener("resize", syncInsets);
+      window.removeEventListener("orientationchange", syncInsets);
+    };
+  }, [platform]);
+
   return (
     <div className={`absolute inset-0 flex flex-col bg-canvas plat-${platform}`}
-      style={{ "--sat": "max(env(safe-area-inset-top), 12px)", "--sab": "max(env(safe-area-inset-bottom), 16px)" } as React.CSSProperties}>
+      style={{
+        "--sat": "max(env(safe-area-inset-top), var(--android-sat, 0px), 12px)",
+        "--sab": "max(env(safe-area-inset-bottom), var(--android-sab, 0px), 16px)",
+      } as React.CSSProperties}>
       <div className="relative flex-1 min-h-0">
         <AppBody />
       </div>
@@ -229,19 +255,28 @@ function MobileShell() {
 
 /* ============ 入口 ============ */
 export default function App() {
-  const { platform, loginOpen, setLoginOpen, tab, setTab, stack, pop, fs, setFs } = useStore();
+  const { platform, theme, loginOpen, setLoginOpen, tab, setTab, stack, pop, fs, setFs, clean, setClean } = useStore();
   useEffect(() => {
     tracePlayback("navigation.change", { tab, stack: stack.map(p => ({ page: p.kind, key: p.key })), login_open: loginOpen });
   }, [tab, stack, loginOpen]);
 
+  useEffect(() => {
+    if (platform !== "android") return;
+    const topPage = stack.length > 0 ? stack[stack.length - 1] : null;
+    const overDarkVideo = fs || (topPage ? topPage.kind === "feed" : tab === "home");
+    const light = theme === "light" && !overDarkVideo;
+    invoke("set_status_bar_light", { light }).catch(() => {});
+  }, [platform, theme, tab, stack, fs]);
+
   /* —— 安卓硬件返回键 ——
-     层级：全屏 → 面板/弹层 → 登录框 → 页面栈 → 回首页 → 退出应用。
+     层级：全屏 → 面板/锁屏弹层 → 清屏模式 → 登录框 → 页面栈 → 回首页 → 退出应用。
      不注册这个监听，Tauri 会直接 webView.goBack() 或退出，表现就是「任意页面返回都回桌面」。 */
   const backRef = useRef<() => void>(() => {});
   backRef.current = () => {
     if (fs) { setFs(false); return; }                        // 沉浸全屏
     if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
-    if (runBack()) return;                                  // 播放器的选集/评论/图文面板
+    if (runBack()) return;                                  // 播放器的选集/评论/图文面板/设置弹层
+    if (clean) { setClean(false); return; }                 // 清屏模式下恢复界面控件
     if (loginOpen) { setLoginOpen(false); return; }
     if (stack.length) { pop(); return; }
     if (tab !== "home") { setTab("home"); return; }
