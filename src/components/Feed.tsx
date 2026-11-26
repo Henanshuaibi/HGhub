@@ -31,7 +31,7 @@ type Props = {
 
 export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind = "video", active, bottomInset, onBack, onNearEnd, startEp, startTime }: Props) {
   const store = useStore();
-  const { isLiked, isFav, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, muted, setMuted, volume, setVolume, toast, addHistory, user, setLoginOpen } = store;
+  const { isLiked, isFav, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, muted, setMuted, volume, setVolume, toast, addHistory } = store;
   const isDesktop = !isMobile;
 
   const boxRef = useRef<HTMLDivElement>(null);
@@ -737,21 +737,17 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     } catch { toast("画中画开启失败", "info"); }
   };
 
-  const requireLogin = () => { if (!user) { setLoginOpen(true); return false; } return true; };
-
   const onLike = () => {
     if (!curId) return;
     const on = toggleLikeLocal(curId);
     setHeartBurst((n) => n + 1);
     toast(on ? "已加入喜欢" : "已取消喜欢", on ? "heart" : "info");
-    if (requireLogin()) { if (kind === "post") api.postLike(curId, on).catch(() => {}); else api.like(curId, curEp, on).catch(() => {}); }
   };
 
   const onFav = () => {
     if (!curId) return;
     const on = toggleFavLocal(curId);
-    toast(on ? "已收藏" : "已取消收藏", on ? "star" : "info");
-    if (requireLogin()) { if (kind === "post") api.postCollect(curId, on).catch(() => {}); else api.collect(curId, on).catch(() => {}); }
+    toast(on ? "已收藏到本地" : "已取消收藏", on ? "star" : "info");
   };
 
   const onFollow = () => {
@@ -759,7 +755,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (!uid) return;
     const on = toggleFollowLocal(uid);
     toast(on ? `已关注 ${detail?.author?.name}` : "已取消关注", on ? "ok" : "info");
-    if (requireLogin()) api.follow(uid, on).catch(() => {});
   };
 
   const pickEp = (ep: number) => {

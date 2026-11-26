@@ -10,7 +10,7 @@ use aes::Aes128;
 use once_cell::sync::Lazy;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::http::{Response, StatusCode};
 
 /// 本平台自定义协议的完整基址。
@@ -34,6 +34,23 @@ static KEY_CACHE: Lazy<Mutex<HashMap<String, (String, Arc<Vec<u8>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static SEG_CACHE: Lazy<Mutex<HashMap<String, (String, Arc<Vec<u8>>)>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static CDN_AUTH: Lazy<RwLock<Option<(String, String)>>> = Lazy::new(|| RwLock::new(None));
+
+/// 记录播放接口返回的 CDN 鉴权头（如 `x-cdn-auth`），供拉取 m3u8/分片时透传。
+pub fn set_cdn_auth(key: Option<String>, value: Option<String>) {
+    if let (Some(k), Some(v)) = (key, value) {
+        let (k, v) = (k.trim().to_string(), v.trim().to_string());
+        if !k.is_empty() && !v.is_empty() {
+            if let Ok(mut guard) = CDN_AUTH.write() {
+                *guard = Some((k, v));
+            }
+        }
+    }
+}
+
+pub fn cdn_auth() -> Option<(String, String)> {
+    CDN_AUTH.read().ok().and_then(|g| g.clone())
+}
 
 const IMG_CACHE_MAX: usize = 240;
 const PL_CACHE_MAX: usize = 60;

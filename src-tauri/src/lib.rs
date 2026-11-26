@@ -7,7 +7,6 @@ mod media;
 mod net;
 mod network_policy;
 mod playback_log;
-mod session;
 
 use api::Api;
 use tauri::Manager;
@@ -58,8 +57,6 @@ pub fn run() {
                 // 上次选择的线路（设置 → 线路）在启动时恢复
                 net::bind_base(&dir);
                 playback_log::bind(&dir);
-                let state: tauri::State<Api> = app.state();
-                state.session.bind(dir);
             }
             // macOS 主窗口在此创建：先按系统红绿灯尺寸算出居中位置（见 macos_titlebar.rs）
             #[cfg(target_os = "macos")]
@@ -159,15 +156,12 @@ pub fn run() {
             api::line_set,
             api::line_mirrors,
             api::line_probe,
+            api::line_auto_pick,
             api::check_update,
             api::open_url,
             api::set_orientation,
             api::get_safe_insets,
             api::set_status_bar_light,
-            api::api_login,
-            api::api_register,
-            api::api_logout,
-            api::api_me,
             api::api_feed,
             api::api_category,
             api::api_rank,
@@ -175,16 +169,10 @@ pub fn run() {
             api::cache_clear,
             api::api_posts,
             api::api_post,
-            api::api_post_like,
-            api::api_post_collect,
             api::api_post_comments,
             api::api_video,
             api::api_play,
             api::api_comments,
-            api::api_comment_send,
-            api::api_like,
-            api::api_collect,
-            api::api_follow,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -2,7 +2,6 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { invoke } from "@tauri-apps/api/core";
 import { api, platform as envPlatform } from "./api";
 import { isStrictSecurity, setStrictSecurity as setHtmlStrictSecurity } from "./html";
-import type { User } from "./types";
 
 export type Platform = "android" | "ios" | "windows" | "macos" | "linux";
 export type Theme = "dark" | "light";
@@ -108,9 +107,6 @@ type Store = {
   theme: Theme; setTheme: (t: Theme) => void;
   tab: Tab; setTab: (t: Tab) => void;
   stack: Page[]; push: (p: PageInput) => void; pop: () => void;
-  user: User | null; setUser: (u: User | null) => void;
-  loginOpen: boolean; setLoginOpen: (b: boolean) => void;
-  logout: () => Promise<void>;
   likes: number[]; favs: number[]; history: WatchProgress[]; follows: number[];
   isLiked: (id: number) => boolean; isFav: (id: number) => boolean;
   toggleLikeLocal: (id: number) => boolean;
@@ -140,8 +136,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(readTheme);
   const [tab, setTabRaw] = useState<Tab>("home");
   const [stack, setStack] = useState<Page[]>([]);
-  const [user, setUser] = useState<User | null>(null);
-  const [loginOpen, setLoginOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [theater, setTheaterState] = useState(false);
   const [fs, setFsState] = useState(false);
@@ -164,7 +158,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     api.boot()
       .then((r) => {
-        if (r.user && (r.user as User).id) setUser(r.user as User);
         if (typeof r.strict_security === "boolean") {
           setStrictSecurityState(r.strict_security);
           setHtmlStrictSecurity(r.strict_security);
@@ -250,12 +243,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
   const clearSearchHist = useCallback(() => setP((s) => ({ ...s, searchHist: [] })), []);
 
-  const logout = useCallback(async () => {
-    try { await api.logout(); } catch { /* ignore */ }
-    setUser(null);
-    toast("已退出登录", "info");
-  }, [toast]);
-
   const setTheater = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
     setTheaterState((prev) => (typeof v === "function" ? (v as (p: boolean) => boolean)(prev) : v));
   }, []);
@@ -291,7 +278,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     platform: envPlatform,
     theme, setTheme: setThemeState,
     tab, setTab, stack, push, pop,
-    user, setUser, loginOpen, setLoginOpen, logout,
     likes: p.likes, favs: p.favs, history: p.history, follows: p.follows,
     isLiked: (id) => p.likes.includes(id),
     isFav: (id) => p.favs.includes(id),
@@ -302,7 +288,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     searchHist: p.searchHist, addSearch, clearSearchHist,
     strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast,
-  }), [theme, tab, setTab, stack, push, pop, user, loginOpen, logout,
+  }), [theme, tab, setTab, stack, push, pop,
     p, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory,
     setMuted, setMuteOnStartup, setVolume, addSearch, clearSearchHist, strictSecurity, strictSecurityReady, securityPending, cliRelaxed, setStrictSecurity,
     toasts, toast, theater, setTheater, fs, setFs, clean, setClean]);

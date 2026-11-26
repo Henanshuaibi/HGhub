@@ -33,7 +33,7 @@ function Row({ item, current, probe, busy, disabled, onPick, onProbe }: {
 
 /* 线路选择：桌面居中弹窗，移动端底部抽屉 */
 export default function LinePicker({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { toast, setUser } = useStore();
+  const { toast } = useStore();
   const [state, setState] = useState<LineState | null>(null);
   const [mirrors, setMirrors] = useState<LineItem[] | null>(null);
   const [mirrorErr, setMirrorErr] = useState("");
@@ -41,6 +41,7 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
   const [probes, setProbes] = useState<ProbeMap>({});
   const [probing, setProbing] = useState("");
   const [switching, setSwitching] = useState("");
+  const [autoPicking, setAutoPicking] = useState(false);
 
   const readState = () => {
     api.lineState().then(setState).catch((e) => toast((e as Error).message || "读取线路失败", "info"));
@@ -90,9 +91,8 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
     setSwitching(url);
     try {
       const next = await api.lineSet(url);
-      if (next !== state?.base) setUser(null);
       setState((s) => (s ? { ...s, base: next } : s));
-      toast(`线路已切换到 ${hostOf(next)}，跨站点需重新登录`, "ok");
+      toast(`已切换到 ${hostOf(next)}`, "ok");
     } catch (e) {
       toast((e as Error).message || "切换失败", "info");
     } finally {
@@ -100,8 +100,22 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
     }
   };
 
+  const autoPick = async () => {
+    if (autoPicking) return;
+    setAutoPicking(true);
+    try {
+      const best = await api.lineAutoPick();
+      setState((s) => (s ? { ...s, base: best } : s));
+      toast(`已自动优选最快线路：${hostOf(best)}`, "ok");
+    } catch (e) {
+      toast((e as Error).message || "自动优选失败", "info");
+    } finally {
+      setAutoPicking(false);
+    }
+  };
+
   const fixed = state?.fixed || [];
-  const busyAll = !!probing || !!switching;
+  const busyAll = !!probing || !!switching || autoPicking;
 
   const body = (
     <div className="flex flex-col min-h-0" style={{ maxHeight: isMobile ? "74vh" : "min(72vh, 620px)" }}>
@@ -111,13 +125,17 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
           <div className="text-[14px] font-bold text-on leading-tight">线路</div>
           <div className="text-[10.5px] text-mut mt-0.5 truncate">当前：{state ? hostOf(state.base) : "读取中…"}</div>
         </div>
+        <button onClick={autoPick} disabled={busyAll}
+          className="h-7 px-3 rounded-(--r-ctl) bg-primary text-on-primary text-[11px] font-semibold pressable disabled:opacity-50">
+          {autoPicking ? "优选…" : "自动优选"}
+        </button>
         <button onClick={onClose} aria-label="关闭" className="w-8 h-8 rounded-full bg-s3/80 flex items-center justify-center text-mut pressable"><IClose size={16} /></button>
       </div>
 
       <div className="flex-1 scroll-y px-3 pb-4">
         <div className="flex items-center gap-2 px-1 mt-1 mb-1.5">
-          <span className="text-[10.5px] font-semibold text-dim tracking-wide">固定线路</span>
-          <span className="text-[10px] text-dim">需代理 / 非大陆网络</span>
+          <span className="text-[10.5px] font-semibold text-dim tracking-wide">内置线路</span>
+          <span className="text-[10px] text-dim">支持免梯直连与自动故障切换</span>
           <button onClick={() => probe(fixed, "fixed")} disabled={busyAll || !fixed.length}
             className="ml-auto text-[10.5px] text-primary pressable disabled:opacity-50">
             {probing === "fixed" ? "检测中…" : "全部检测"}
@@ -132,8 +150,8 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
         </div>
 
         <div className="flex items-center gap-2 px-1 mt-4 mb-1.5">
-          <span className="text-[10.5px] font-semibold text-dim tracking-wide">镜像线路</span>
-          <span className="text-[10px] text-dim">一般可直连 · 仅游客浏览</span>
+          <span className="text-[10.5px] font-semibold text-dim tracking-wide">动态镜像</span>
+          <span className="text-[10px] text-dim">实时抓取最新免梯域名</span>
           <button onClick={() => { void readMirrors(); }} disabled={loadingMirrors}
             className="ml-auto inline-flex items-center gap-1 text-[10.5px] text-primary pressable disabled:opacity-50">
             <IRefresh size={12} />{loadingMirrors ? "获取中…" : "刷新"}

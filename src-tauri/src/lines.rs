@@ -7,17 +7,22 @@
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
-/// 固定线路：写死在客户端里，不依赖任何外部页面。
-pub const FIXED: [(&str, &str); 2] = [
-    ("固定线路 1", "https://huangguoai.com"),
-    ("固定线路 2", "https://huangguoai.ai"),
+/// 固定线路：内置直连镜像与主站，确保国内外及开关 VPN 场景均可开箱直连。
+pub const FIXED: [(&str, &str); 4] = [
+    ("直连镜像 1（推荐免梯）", "https://thu.wsaditmwl.cc"),
+    ("直连镜像 2（免梯备用）", "https://pku.xxslfswu.cc"),
+    ("直连镜像 3（免梯备用）", "https://fdu.wsaditmwl.cc"),
+    ("官方主站（海外/代理）", "https://huangguoai.com"),
 ];
 
-const PUBLISH_PAGE: &str = "https://huangguoai.pages.dev/";
+const PUBLISH_PAGES: [&str; 2] = [
+    "https://huangguoai.pages.dev/",
+    "https://huang-guo.pages.dev/",
+];
 /// 镜像列表上限（子域 × 域名是笛卡尔积，界面只展示这么多）
 const MIRROR_MAX: usize = 60;
 /// 单条线路探测超时
-const PROBE_TIMEOUT: Duration = Duration::from_secs(8);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 
 pub fn fixed() -> Value {
     json!(FIXED
@@ -26,11 +31,22 @@ pub fn fixed() -> Value {
         .collect::<Vec<_>>())
 }
 
-/// 拉地址发布页 → 解析 publish.js → 拼出镜像地址。只在用户点开「线路」时调用。
+/// 拉地址发布页 → 解析 publish.js → 拼出镜像地址。
 pub async fn mirrors() -> Result<Value, String> {
-    let html = get_text(PUBLISH_PAGE).await?;
+    let mut last_err = String::from("地址发布页不可达");
+    for publish_page in PUBLISH_PAGES {
+        match mirrors_from(publish_page).await {
+            Ok(v) => return Ok(v),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
+async fn mirrors_from(publish_page: &str) -> Result<Value, String> {
+    let html = get_text(publish_page).await?;
     let js_rel = script_src(&html).unwrap_or_else(|| "publish.js".to_string());
-    let js_url = absolute(PUBLISH_PAGE, &js_rel);
+    let js_url = absolute(publish_page, &js_rel);
     let js = get_text(&js_url).await?;
 
     let domains = js_array(&js, "var urls");
@@ -65,7 +81,92 @@ pub async fn mirrors() -> Result<Value, String> {
         return Err("地址发布页里没有可用的镜像地址".to_string());
     }
 
-    Ok(json!({ "source": PUBLISH_PAGE, "script": js_url, "items": items }))
+    Ok(json!({ "source": publish_page, "script": js_url, "items": items }))
+}
+
+/// 真实探测某条线路的业务接口是否可用（校验 /api/videos 返回有效 JSON）。
+pub async fn probe_api_ok(origin: &str) -> Result<u64, String> {
+    let target = format!("{}/api/videos?page=1&size=1", origin.trim_end_matches('/'));
+    let referer = format!("{}/", origin.trim_end_matches('/'));
+    let started = Instant::now();
+    let resp = crate::net::get(
+        &target,
+        PROBE_TIMEOUT,
+        Some("application/json"),
+        Some(&referer),
+    )
+    .await?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let text = resp.text().await.map_err(|e| crate::net::err_text(&e))?;
+    let val: Value = serde_json::from_str(&text).map_err(|_| "返回非 JSON".to_string())?;
+    if val.get("status").and_then(Value::as_i64) == Some(1) {
+        Ok(started.elapsed().as_millis() as u64)
+    } else {
+        Err("业务接口不可用".to_string())
+    }
+}
+
+/// 自动并发探测内置线路与最新镜像，返回最快可用线路。
+pub async fn find_fastest_line(exclude: Option<&str>) -> Option<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(ex) = exclude {
+        seen.insert(ex.trim_end_matches('/').to_string());
+    }
+    for (_, u) in FIXED {
+        let u = u.trim_end_matches('/').to_string();
+        if seen.insert(u.clone()) {
+            candidates.push(u);
+        }
+    }
+    // 第一轮先并发测内置线路（最快，不额外等 publish.js）
+    if let Some(best) = race_candidates(&candidates).await {
+        return Some(best);
+    }
+    // 第二轮拉取地址发布页动态镜像
+    if let Ok(m) = mirrors().await {
+        let mut dynamic: Vec<String> = Vec::new();
+        if let Some(arr) = m.get("items").and_then(Value::as_array) {
+            for item in arr {
+                if let Some(u) = item.get("url").and_then(Value::as_str) {
+                    let u = u.trim_end_matches('/').to_string();
+                    if seen.insert(u.clone()) {
+                        dynamic.push(u);
+                        if dynamic.len() >= 10 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(best) = race_candidates(&dynamic).await {
+            return Some(best);
+        }
+    }
+    None
+}
+
+async fn race_candidates(urls: &[String]) -> Option<String> {
+    if urls.is_empty() {
+        return None;
+    }
+    let mut handles = Vec::new();
+    for u in urls {
+        let u = u.clone();
+        handles.push(tokio::spawn(async move {
+            probe_api_ok(&u).await.map(|ms| (u, ms))
+        }));
+    }
+    let mut winners: Vec<(String, u64)> = Vec::new();
+    for h in handles {
+        if let Ok(Ok(pair)) = h.await {
+            winners.push(pair);
+        }
+    }
+    winners.sort_by_key(|(_, ms)| *ms);
+    winners.into_iter().next().map(|(u, _)| u)
 }
 
 /// 可达性探测（并发 6 条一组）。只报结果，不做自动切换。
@@ -87,22 +188,17 @@ pub async fn probe(urls: Vec<String>) -> Value {
 }
 
 async fn probe_one(url: String) -> Value {
-    let target = format!("{}/", url.trim_end_matches('/'));
     let started = Instant::now();
-    let res = crate::net::get(
-        &target,
-        PROBE_TIMEOUT,
-        Some("text/html,application/xhtml+xml"),
-        None,
-    )
-    .await;
-    let ms = started.elapsed().as_millis() as u64;
-    match res {
-        Ok(r) => {
-            let status = r.status().as_u16();
-            json!({ "url": url, "ok": status < 400, "status": status, "ms": ms })
+    match probe_api_ok(&url).await {
+        Ok(ms) => json!({ "url": url, "ok": true, "status": 200, "ms": ms }),
+        Err(e) => {
+            let ms = started.elapsed().as_millis() as u64;
+            let status = e
+                .strip_prefix("HTTP ")
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse::<u16>().ok());
+            json!({ "url": url, "ok": false, "status": status, "ms": ms, "error": e })
         }
-        Err(e) => json!({ "url": url, "ok": false, "ms": ms, "error": e }),
     }
 }
 

@@ -92,7 +92,13 @@ pub fn allowed_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();
-            if a == 198 && (b == 18 || b == 19) {
+            // 放行主流 VPN TUN FakeIP 网段：Clash/mihomo (198.18.0.0/15)、sing-box/v2rayNG/Nekobox (172.18.0.0/15)。
+            if (a == 198 && (b == 18 || b == 19)) || (a == 172 && (b == 18 || b == 19)) {
+                return true;
+            }
+            // 安卓端常见 VPN TUN 还可能使用 10.0.0.0/8、100.64.0.0/10 或 172.16.0.0/12；仍阻止回环/链路本地/组播。
+            #[cfg(target_os = "android")]
+            if a == 10 || (a == 100 && (64..=127).contains(&b)) || (a == 172 && (16..=31).contains(&b)) {
                 return true;
             }
             !(a == 0
@@ -113,6 +119,11 @@ pub fn allowed_ip(ip: IpAddr) -> bool {
                 return allowed_ip(IpAddr::V4(v4));
             }
             let s = ip.segments();
+            // 安卓端 VPN（如 sing-box）IPv6 FakeIP 常用 ULA 网段 fdfe::/16
+            #[cfg(target_os = "android")]
+            if (s[0] & 0xfe00) == 0xfc00 {
+                return true;
+            }
             // 仅全球单播；拒绝 ULA、链路本地、回环、组播、NAT64，以及可封装私网 IPv4 的 6to4/Teredo。
             (s[0] & 0xe000) == 0x2000
                 && s[0] != 0x2002

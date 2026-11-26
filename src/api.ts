@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  CommentPage, Detail, Paged, PlayInfo, Post, RankItem, User, VideoCard,
+  CommentPage, Detail, Paged, PlayInfo, Post, RankItem, VideoCard,
 } from "./types";
 
 /* ── 运行环境 ───────────────────────────────────────────── */
@@ -63,19 +63,13 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 export const api = {
   boot: () =>
     call<{
-      user: User | null;
-      logged_in: boolean;
+      user?: null;
+      logged_in?: boolean;
       base: string;
       strict_security?: boolean;
       cli_relaxed?: boolean;
     }>("app_boot"),
   securitySet: (strict: boolean) => call<boolean>("security_set", { strict }),
-  login: (username: string, password: string) =>
-    call<{ user: User }>("api_login", { username, password }),
-  register: (username: string, password: string, email = "") =>
-    call<{ user: User }>("api_register", { username, password, email }),
-  logout: () => call<{ ok: boolean }>("api_logout"),
-  me: () => call<User>("api_me"),
 
   feed: (page = 1, size = 20) => call<Paged<VideoCard>>("api_feed", { page, size }),
   category: (cate: string, page = 1, size = 20) =>
@@ -94,23 +88,17 @@ export const api = {
 
   comments: (id: number, ep: number, page = 1, size = 20) =>
     call<CommentPage>("api_comments", { id, ep, page, size }),
-  commentSend: (id: number, ep: number, text: string, replyId?: number) =>
-    call<unknown>("api_comment_send", { id, ep, text, replyId: replyId ?? null }),
 
   clearCache: () => invoke<void>("cache_clear"),
   netDiag: () => invoke<Record<string, unknown>>("net_diag"),
-  postLike: (id: number, on: boolean) => invoke<unknown>("api_post_like", { id, on }),
-  postCollect: (id: number, on: boolean) => invoke<unknown>("api_post_collect", { id, on }),
   postComments: (id: number, page: number, size: number) => call<CommentPage>("api_post_comments", { id, page, size }),
-  like: (id: number, ep: number, on: boolean) => call<unknown>("api_like", { id, ep, on }),
-  collect: (id: number, on: boolean) => call<unknown>("api_collect", { id, on }),
-  follow: (uid: number, on: boolean) => call<unknown>("api_follow", { uid, on }),
 
-  /* 线路（数据源）：固定线路写死在 Rust 侧，镜像线路按需从地址发布页拉取 */
+  /* 线路（数据源）：内置直连线路 + 动态镜像 + 一键自动优选 */
   lineState: () => call<LineState>("line_state"),
   lineSet: (url: string) => call<string>("line_set", { url }),
   lineMirrors: () => call<LineMirrors>("line_mirrors"),
   lineProbe: (urls: string[]) => call<LineProbe[]>("line_probe", { urls }),
+  lineAutoPick: () => call<string>("line_auto_pick"),
 
   /* 更新检查：对比 GitHub Release 的 tag */
   checkUpdate: () => call<UpdateInfo>("check_update"),

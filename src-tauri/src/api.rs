@@ -1,43 +1,82 @@
-//! 业务命令：登录 / 列表 / 详情 / 播放 / 互动。
+//! 业务命令：列表 / 详情 / 播放 / 评论（免费无登录纯净版）。
 
 use crate::net::{base, edge};
-use crate::session::SessionStore;
 use serde_json::{json, Value};
 use tauri::State;
 use tauri_plugin_opener::OpenerExt;
 
-pub struct Api {
-    pub session: SessionStore,
-}
+pub struct Api;
 
 impl Api {
     pub fn new() -> Self {
-        Self {
-            session: SessionStore::new(),
+        Self
+    }
+
+    async fn request(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
+        let origin = base();
+        match edge(&origin, method, path, body.clone(), None).await {
+            Ok(v) => Ok(v),
+            Err(err) => {
+                if let Some(next_origin) = crate::net::auto_failover(&origin).await {
+                    if next_origin != origin {
+                        return edge(&next_origin, method, path, body, None).await;
+                    }
+                }
+                Err(err)
+            }
         }
     }
 
     async fn get(&self, path: &str) -> Result<Value, String> {
-        let origin = base();
-        let token = self.session.token(&origin);
-        edge(&origin, "GET", path, None, token.as_deref()).await
+        self.request("GET", path, None).await
     }
 
-    /// POST（游客也可调用，有登录态时带上 token）：新播放接口需要。
+    /// POST（免费免登录调用）：新播放接口需要。
     async fn post(&self, path: &str, body: Option<Value>) -> Result<Value, String> {
-        let origin = base();
-        let token = self.session.token(&origin);
-        edge(&origin, "POST", path, body, token.as_deref()).await
+        self.request("POST", path, body).await
     }
+}
 
-    async fn authed(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
-        let origin = base();
-        let token = self
-            .session
-            .token(&origin)
-            .ok_or_else(|| "请先登录".to_string())?;
-        edge(&origin, method, path, body, Some(&token)).await
+/// 过滤上游列表中的广告条目（如有）。
+fn strip_ad_items(mut data: Value) -> Value {
+    if let Some(items) = data.get_mut("items").and_then(Value::as_array_mut) {
+        items.retain(|it| {
+            let is_ad = it.get("is_ad").and_then(Value::as_bool).unwrap_or(false)
+                || it.get("is_ad").and_then(Value::as_i64) == Some(1)
+                || it.get("ad_url").and_then(Value::as_str).is_some_and(|s| !s.is_empty());
+            !is_ad
+        });
     }
+    data
+}
+
+/// 兼容新版评论字段：部分接口把正文放在 `content` 而非 `text`。
+fn normalize_comments(mut data: Value) -> Value {
+    if let Some(items) = data.get_mut("items").and_then(Value::as_array_mut) {
+        for item in items {
+            if let Some(obj) = item.as_object_mut() {
+                let has_text = obj
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty());
+                if !has_text {
+                    if let Some(content) = obj.get("content").and_then(Value::as_str).map(str::to_owned) {
+                        obj.insert("text".into(), json!(content));
+                    }
+                }
+                let has_time = obj
+                    .get("time")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty());
+                if !has_time {
+                    if let Some(created) = obj.get("created_at").and_then(Value::as_str).map(str::to_owned) {
+                        obj.insert("time".into(), json!(created));
+                    }
+                }
+            }
+        }
+    }
+    data
 }
 
 /// API/运行错误与自检统一写入 debug.log，每行附 RFC 3339 UTC 时间和进程编号。
@@ -68,28 +107,32 @@ pub async fn line_state() -> Result<Value, String> {
 
 /// 手动切换线路：立即生效并落盘（下次启动沿用）。
 #[tauri::command]
-pub async fn line_set(state: State<'_, Api>, url: String) -> Result<String, String> {
-    let previous = base();
-    let next = crate::net::set_base(&url)?;
-    if previous != next {
-        state.session.clear();
-    }
-    Ok(next)
+pub async fn line_set(url: String) -> Result<String, String> {
+    crate::net::set_base(&url)
 }
 
 /// 从地址发布页抓镜像线路（只在用户点开「线路」时调用）。
 #[tauri::command]
 pub async fn line_mirrors() -> Result<Value, String> {
-    // 用户手动点「刷新 / 打开线路」时重新读一次系统代理：代理软件开关过之后旧客户端会卡死
     crate::net::refresh_client();
     crate::lines::mirrors().await
 }
 
-/// 可达性探测：只报结果，不做自动检查 / 自动切换。
+/// 可达性探测：并发校验业务接口延迟。
 #[tauri::command]
 pub async fn line_probe(urls: Vec<String>) -> Result<Value, String> {
     crate::net::refresh_client();
     Ok(crate::lines::probe(urls).await)
+}
+
+/// 一键自动探测并切换到当前网络最快的可用线路。
+#[tauri::command]
+pub async fn line_auto_pick() -> Result<String, String> {
+    crate::net::refresh_client();
+    let best = crate::lines::find_fastest_line(None)
+        .await
+        .ok_or_else(|| "暂未探测到可用线路，请检查网络连接后重试".to_string())?;
+    crate::net::set_base(&best)
 }
 
 /* ───────────────────────── 更新检查 ───────────────────────── */
@@ -403,14 +446,14 @@ fn request_ios_orientation(landscape: bool) {
     }
 }
 
-/* ───────────────────────── 会话 ───────────────────────── */
+/* ───────────────────────── 启动初始化 ───────────────────────── */
 
 #[tauri::command]
-pub async fn app_boot(state: State<'_, Api>) -> Result<Value, String> {
+pub async fn app_boot() -> Result<Value, String> {
     let origin = base();
     Ok(json!({
-        "user": state.session.user(&origin),
-        "logged_in": state.session.token(&origin).is_some(),
+        "user": Value::Null,
+        "logged_in": false,
         "base": origin,
         "strict_security": crate::network_policy::strict_security(),
         "cli_relaxed": crate::network_policy::cli_strict_override() == Some(false),
@@ -429,101 +472,6 @@ pub async fn security_set(strict: bool) -> Result<bool, String> {
     Ok(crate::network_policy::strict_security())
 }
 
-#[tauri::command]
-pub async fn api_login(
-    state: State<'_, Api>,
-    username: String,
-    password: String,
-) -> Result<Value, String> {
-    let origin = base();
-    let data = edge(
-        &origin,
-        "POST",
-        "/api/account/loginByPassword",
-        Some(json!({ "username": username, "password": password })),
-        None,
-    )
-    .await?;
-    let token = data
-        .get("token")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "登录返回缺少 token".to_string())?
-        .to_string();
-    let user = data.get("user").cloned().unwrap_or(Value::Null);
-    if base() != origin {
-        return Err("登录期间线路已变化，请重新登录".into());
-    }
-    state.session.set(&origin, token, user.clone());
-    Ok(json!({ "user": user }))
-}
-
-#[tauri::command]
-pub async fn api_register(
-    state: State<'_, Api>,
-    username: String,
-    password: String,
-    email: String,
-) -> Result<Value, String> {
-    let origin = base();
-    let mut body = json!({
-        "username": username,
-        "password": password,
-        "confirm_password": password,
-    });
-    if !email.trim().is_empty() {
-        body["email"] = json!(email);
-    }
-    let data = edge(
-        &origin,
-        "POST",
-        "/api/account/registerByPassword",
-        Some(body),
-        None,
-    )
-    .await?;
-    let token = data
-        .get("token")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "注册返回缺少 token".to_string())?
-        .to_string();
-    let user = data.get("user").cloned().unwrap_or(Value::Null);
-    if base() != origin {
-        return Err("注册期间线路已变化，请重新登录".into());
-    }
-    state.session.set(&origin, token, user.clone());
-    Ok(json!({ "user": user }))
-}
-
-#[tauri::command]
-pub async fn api_logout(state: State<'_, Api>) -> Result<Value, String> {
-    let origin = base();
-    let token = state.session.token(&origin);
-    let _ = edge(
-        &origin,
-        "POST",
-        "/api/account/logout",
-        None,
-        token.as_deref(),
-    )
-    .await;
-    state.session.clear();
-    Ok(json!({ "ok": true }))
-}
-
-#[tauri::command]
-pub async fn api_me(state: State<'_, Api>) -> Result<Value, String> {
-    let origin = base();
-    let token = state.session.token(&origin);
-    let me = edge(&origin, "GET", "/api/account/me", None, token.as_deref()).await?;
-    if base() != origin {
-        return Err("读取账号期间线路已变化".into());
-    }
-    if let Some(token) = state.session.token(&origin) {
-        state.session.set(&origin, token, me.clone());
-    }
-    Ok(me)
-}
-
 /* ───────────────────────── 列表 ───────────────────────── */
 
 #[tauri::command]
@@ -531,6 +479,7 @@ pub async fn api_feed(state: State<'_, Api>, page: u32, size: u32) -> Result<Val
     state
         .get(&format!("/api/videos?page={page}&size={size}"))
         .await
+        .map(strip_ad_items)
 }
 
 #[tauri::command]
@@ -545,6 +494,7 @@ pub async fn api_category(
             "/api/videos/category/{cate}?page={page}&size={size}"
         ))
         .await
+        .map(strip_ad_items)
 }
 
 #[tauri::command]
@@ -567,6 +517,7 @@ pub async fn api_search(
     state
         .get(&format!("/api/search?q={encoded}&page={page}&size={size}"))
         .await
+        .map(strip_ad_items)
 }
 
 #[tauri::command]
@@ -574,6 +525,7 @@ pub async fn api_posts(state: State<'_, Api>, page: u32, size: u32) -> Result<Va
     state
         .get(&format!("/api/posts?page={page}&size={size}"))
         .await
+        .map(strip_ad_items)
 }
 
 #[tauri::command]
@@ -588,13 +540,18 @@ pub async fn api_video(state: State<'_, Api>, id: i64) -> Result<Value, String> 
     state.get(&format!("/api/videos/{id}")).await
 }
 
-/// 新版播放接口返回 `streams.{main,hevc,preview}`，旧接口的 `video_url` 现在恒为空串。
-/// 这里把新字段回填到 `video_url` / `video_url_hevc`，前端和自检继续按原字段取流。
+/// 新版播放接口返回 `streams.{main,hevc,preview}` 与 `cdn.{authKey,authValue}`。
+/// 这里回填 `video_url` / `video_url_hevc` 并同步 CDN 鉴权头供媒体代理透传。
 fn normalize_play_info(info: &mut Value) {
     fn non_empty(v: Option<&Value>) -> Option<String> {
         v.and_then(|x| x.as_str())
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
+    }
+    if let Some(cdn) = info.get("cdn") {
+        let key = non_empty(cdn.get("authKey"));
+        let val = non_empty(cdn.get("authValue"));
+        crate::media::set_cdn_auth(key, val);
     }
     let main = non_empty(info.get("streams").and_then(|s| s.get("main")));
     let hevc = non_empty(info.get("streams").and_then(|s| s.get("hevc")));
@@ -645,7 +602,7 @@ pub async fn api_play(state: State<'_, Api>, id: i64, ep: u32) -> Result<Value, 
     }
 }
 
-/* ───────────────────────── 评论 / 互动 ───────────────────────── */
+/* ───────────────────────── 评论（只读，免登录） ───────────────────────── */
 
 #[tauri::command]
 pub async fn api_comments(
@@ -660,49 +617,7 @@ pub async fn api_comments(
             "/api/videos/{id}/comments?ep={ep}&page={page}&size={size}"
         ))
         .await
-}
-
-#[tauri::command]
-pub async fn api_comment_send(
-    state: State<'_, Api>,
-    id: i64,
-    ep: u32,
-    text: String,
-    reply_id: Option<i64>,
-) -> Result<Value, String> {
-    let mut body = json!({ "text": text });
-    let path = match reply_id {
-        Some(rid) if rid > 0 => {
-            body["reply_id"] = json!(rid);
-            format!("/api/videos/{id}/comments")
-        }
-        _ => format!("/api/videos/{id}/comments?ep={ep}"),
-    };
-    state.authed("POST", &path, Some(body)).await
-}
-
-#[tauri::command]
-pub async fn api_like(state: State<'_, Api>, id: i64, ep: u32, on: bool) -> Result<Value, String> {
-    let method = if on { "POST" } else { "DELETE" };
-    state
-        .authed(method, &format!("/api/videos/{id}/like?ep={ep}"), None)
-        .await
-}
-
-#[tauri::command]
-pub async fn api_collect(state: State<'_, Api>, id: i64, on: bool) -> Result<Value, String> {
-    let method = if on { "POST" } else { "DELETE" };
-    state
-        .authed(method, &format!("/api/videos/{id}/collect"), None)
-        .await
-}
-
-#[tauri::command]
-pub async fn api_follow(state: State<'_, Api>, uid: i64, on: bool) -> Result<Value, String> {
-    let method = if on { "POST" } else { "DELETE" };
-    state
-        .authed(method, &format!("/api/users/{uid}/follow"), None)
-        .await
+        .map(normalize_comments)
 }
 
 /* ───────────────────────── 本地缓存 ───────────────────────── */
@@ -713,23 +628,7 @@ pub async fn cache_clear() -> Result<(), String> {
     Ok(())
 }
 
-/* ───────────────────────── 吃瓜帖子互动 ───────────────────────── */
-
-#[tauri::command]
-pub async fn api_post_like(state: State<'_, Api>, id: i64, on: bool) -> Result<Value, String> {
-    let method = if on { "POST" } else { "DELETE" };
-    state
-        .authed(method, &format!("/api/posts/{id}/like"), None)
-        .await
-}
-
-#[tauri::command]
-pub async fn api_post_collect(state: State<'_, Api>, id: i64, on: bool) -> Result<Value, String> {
-    let method = if on { "POST" } else { "DELETE" };
-    state
-        .authed(method, &format!("/api/posts/{id}/collect"), None)
-        .await
-}
+/* ───────────────────────── 吃瓜帖子评论 ───────────────────────── */
 
 #[tauri::command]
 pub async fn api_post_comments(
@@ -741,6 +640,7 @@ pub async fn api_post_comments(
     state
         .get(&format!("/api/posts/{id}/comments?page={page}&size={size}"))
         .await
+        .map(normalize_comments)
 }
 #[cfg(test)]
 mod tests {

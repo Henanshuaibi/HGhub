@@ -234,8 +234,7 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
           </div>
 
           <p className="text-[12px] text-on/70 leading-relaxed mt-4">
-            基于 Rust + Tauri 2 构建的跨平台客户端，支持 Android、iOS、Windows、macOS 与 Linux。
-            界面遵循 Fluent 设计语言，播放器采用沉浸式竖屏信息流与增强手势控制。
+            基于 Rust + Tauri 2 构建的免费纯净版客户端，零广告、零内购、无需登录注册，支持自动优选直连线路与全能手势播放。
           </p>
 
           <div className="mt-4 rounded-(--r-sm) bg-s3/60 p-3 text-[11px] text-mut leading-relaxed">
@@ -271,7 +270,7 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
         <div className="p-5">
           <div className="text-[14.5px] font-bold text-on">清理缓存</div>
           <p className="text-[12px] text-mut leading-relaxed mt-2">
-            只清除封面与播放列表缓存（解密图 / m3u8）。收藏、观看记录、搜索历史与登录状态都会保留。
+            只清除封面与播放列表缓存（解密图 / m3u8）。收藏、观看记录与搜索历史都会保留。
           </p>
           <div className="flex gap-2 mt-5">
             <button onClick={() => setClearOpen(false)} className="flex-1 h-9 rounded-(--r-ctl) bg-s3 text-[12.5px] text-on/80 pressable">取消</button>
